@@ -1,0 +1,19 @@
+# macOS System Files
+.DS_Store
+
+# Microsoft Office Documents
+*.docx
+*.pptx
+*.xlsx
+
+# Compressed Archives
+*.zip
+*.rar
+*.7z
+
+# Large Reference PDFs in specific folder
+Reference_Guides/
+
+# Script execution logs and results
+W-*/KISA_LOG/
+W-*/KISA_RESULT/
