@@ -4,12 +4,11 @@ param(
 )
 
 $dir = $PSScriptRoot
-$log_dir = Join-Path $dir "KISA_LOG"
 $result_dir = Join-Path $dir "KISA_RESULT"
 $backup_file = Join-Path $dir "W-78.backup.json"
-New-Item -ItemType Directory -Force -Path $log_dir, $result_dir | Out-Null
+New-Item -ItemType Directory -Force -Path $result_dir | Out-Null
 
-$log_file = Join-Path $log_dir "W-78.log"
+$log_file = Join-Path $result_dir "W-78.log"
 $json_file = Join-Path $result_dir "W-78.json"
 
 $detect_status = "PASS"

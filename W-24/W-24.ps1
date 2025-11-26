@@ -4,12 +4,11 @@ param(
 )
 
 $dir = $PSScriptRoot
-$log_dir = Join-Path $dir "KISA_LOG"
 $result_dir = Join-Path $dir "KISA_RESULT"
 $backup_file = Join-Path $dir "W-24.backup.json"
-New-Item -ItemType Directory -Force -Path $log_dir, $result_dir | Out-Null
+New-Item -ItemType Directory -Force -Path $result_dir | Out-Null
 
-$log_file = Join-Path $log_dir "W-24.log"
+$log_file = Join-Path $result_dir "W-24.log"
 $json_file = Join-Path $result_dir "W-24.json"
 
 $detect_status = "PASS"
@@ -104,8 +103,8 @@ try {
     $initial_status = Get-NetbiosStatus
     $vulnerable_adapters = $initial_status | Where-Object { $_.IsVulnerable }
     if ($vulnerable_adapters) {
-        $detect_status = "FAIL"
-        Write-Host "[FAIL] Vulnerable adapters found:" -ForegroundColor Yellow
+        $detect_status = "Vulnerable"
+        Write-Host "[Vulnerable] Vulnerable adapters found:" -ForegroundColor Yellow
         $vulnerable_adapters | ForEach-Object { Write-Host " - $($_.Adapter) (NetBIOS over TCP/IP is not disabled)" -ForegroundColor Yellow }
     } else {
         $detect_status = "PASS"
@@ -117,7 +116,7 @@ try {
         Write-Host ""
         Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
         Write-Host "--------------------"
-        if ($detect_status -eq "FAIL") {
+        if ($detect_status -eq "Vulnerable") {
             # Backup original settings
             Write-Host "[INFO] Backing up original settings for vulnerable adapters to $backup_file..."
             $vulnerable_adapters | ConvertTo-Json | Set-Content -Path $backup_file -Encoding UTF8
@@ -196,7 +195,7 @@ Step 1) Start > Run > ncpa.cpl > Local Area Connection > Properties > TCP/IP > C
             [PSCustomObject]@{
                 phase   = "remediate"
                 status  = $remediate_status
-                details = (if ($final_status) { $final_status } else { $initial_status } | ConvertTo-Json -Compress)
+                details = ConvertTo-Json -InputObject $(if ($final_status) { $final_status } else { $initial_status }) -Compress
             }
         )
     }
