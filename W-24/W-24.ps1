@@ -1,6 +1,12 @@
+param(
+    [ValidateSet("Detect", "Remediate", "Restore")]
+    [string]$Action = "Detect"
+)
+
 $dir = $PSScriptRoot
 $log_dir = Join-Path $dir "KISA_LOG"
 $result_dir = Join-Path $dir "KISA_RESULT"
+$backup_file = Join-Path $dir "W-24.backup.json"
 New-Item -ItemType Directory -Force -Path $log_dir, $result_dir | Out-Null
 
 $log_file = Join-Path $log_dir "W-24.log"
@@ -9,14 +15,68 @@ $json_file = Join-Path $result_dir "W-24.json"
 $detect_status = "PASS"
 $remediate_status = "FAIL"
 $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ssK"
+$isLegacyPS = $PSVersionTable.PSVersion.Major -lt 3
+
+function Get-NetbiosStatus {
+    Write-Host "[INFO] Querying for network adapter configurations..."
+    if ($isLegacyPS) {
+        $adapters = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "IPEnabled='TRUE'"
+    } else {
+        $adapters = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='TRUE'"
+    }
+    
+    $status = @()
+    foreach ($adapter in $adapters) {
+        $status += [PSCustomObject]@{
+            Adapter        = $adapter.Description
+            InterfaceIndex = $adapter.InterfaceIndex
+            NetbiosSetting = $adapter.TcpipNetbiosOptions # 0: DHCP, 1: Enabled, 2: Disabled
+            IsVulnerable   = $adapter.TcpipNetbiosOptions -ne 2
+        }
+    }
+    Write-Host "[INFO] Found $($status.Count) IP-enabled network adapters."
+    return $status
+}
+
+function Restore-FromBackup {
+    if (-not (Test-Path $backup_file)) {
+        throw "Backup file not found: $backup_file. Nothing to restore."
+    }
+    Write-Host "[INFO] Restoring settings from backup file: $backup_file" -ForegroundColor Cyan
+    $adapters_to_restore = Get-Content -Path $backup_file | ConvertFrom-Json
+    
+    foreach ($adapter_to_restore in $adapters_to_restore) {
+        $original_setting = $adapter_to_restore.NetbiosSetting
+        Write-Host "[ACTION] Restoring NetBIOS setting for '$($adapter_to_restore.Adapter)' to original value: $original_setting"
+        
+        try {
+            if ($isLegacyPS) {
+                $adapter_instance = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$($adapter_to_restore.InterfaceIndex)"
+                $restore_result = $adapter_instance.SetTcpipNetbios($original_setting)
+            } else {
+                $adapter_instance = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$($adapter_to_restore.InterfaceIndex)"
+                $restore_result = $adapter_instance | Invoke-CimMethod -MethodName SetTcpipNetbios -Arguments @{TcpipNetbiosOptions = $original_setting}
+            }
+
+            if ($restore_result.ReturnValue -eq 0) {
+                Write-Host "[SUCCESS] Successfully restored setting for '$($adapter_to_restore.Adapter)'." -ForegroundColor Green
+            } else {
+                Write-Host "[ERROR] Failed to restore setting for '$($adapter_to_restore.Adapter)'. Return code: $($restore_result.ReturnValue)" -ForegroundColor Red
+            }
+        } catch {
+            Write-Host "[ERROR] Failed to restore setting for '$($adapter_to_restore.Adapter)'. Details: $_" -ForegroundColor Red
+        }
+    }
+    Remove-Item -Path $backup_file
+    Write-Host "[SUCCESS] Restoration complete. Backup file deleted." -ForegroundColor Green
+}
 
 try {
     Write-Host "[INFO] Starting script execution and logging to: $log_file"
     Start-Transcript -Path $log_file -Append
-    Write-Host "========= [W-24] Windows Server Security Assessment ==========" -ForegroundColor Cyan
+    Write-Host "========= [W-24] Windows Server Security Assessment (Action: $Action) ==========" -ForegroundColor Cyan
     Write-Host "[$ts]"
 
-    $isLegacyPS = $PSVersionTable.PSVersion.Major -lt 3
     if ($isLegacyPS) {
         Write-Host "[INFO] Legacy PowerShell (version < 3.0) detected. Using WMI cmdlets." -ForegroundColor Yellow
     } else {
@@ -33,26 +93,9 @@ try {
     }
     Write-Host "[SUCCESS] Administrator privileges confirmed." -ForegroundColor Green
 
-
-    function Get-NetbiosStatus {
-        Write-Host "[INFO] Querying for network adapter configurations..."
-        if ($isLegacyPS) {
-            $adapters = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "IPEnabled='TRUE'"
-        } else {
-            $adapters = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='TRUE'"
-        }
-        
-        $status = @()
-        foreach ($adapter in $adapters) {
-            $status += [PSCustomObject]@{
-                Adapter        = $adapter.Description
-                InterfaceIndex = $adapter.InterfaceIndex
-                NetbiosSetting = $adapter.TcpipNetbiosOptions # 0: DHCP, 1: Enabled, 2: Disabled
-                IsVulnerable   = $adapter.TcpipNetbiosOptions -ne 2
-            }
-        }
-        Write-Host "[INFO] Found $($status.Count) IP-enabled network adapters."
-        return $status
+    if ($Action -eq 'Restore') {
+        Restore-FromBackup
+        exit
     }
 
     Write-Host ""
@@ -69,14 +112,18 @@ try {
         Write-Host "[PASS] All network adapters have NetBIOS over TCP/IP disabled." -ForegroundColor Green
     }
 
-    Write-Host ""
-    Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
-    Write-Host "--------------------"
     $final_status = $null
-    if ($detect_status -eq "FAIL") {
-        $choice = Read-Host "취약점이 발견되었습니다. 자동으로 조치하시겠습니까? (y/n)"
-        if ($choice -match '^[Yy]$') {
-            Write-Host "[INFO] User approved automatic remediation."
+    if ($Action -eq 'Remediate') {
+        Write-Host ""
+        Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
+        Write-Host "--------------------"
+        if ($detect_status -eq "FAIL") {
+            # Backup original settings
+            Write-Host "[INFO] Backing up original settings for vulnerable adapters to $backup_file..."
+            $vulnerable_adapters | ConvertTo-Json | Set-Content -Path $backup_file -Encoding UTF8
+            Write-Host "[SUCCESS] Backup complete." -ForegroundColor Green
+
+            # Apply remediation
             foreach ($adapter_info in $vulnerable_adapters) {
                 Write-Host "[ACTION] Disabling NetBIOS over TCP/IP for: $($adapter_info.Adapter)"
                 
@@ -107,15 +154,9 @@ try {
                 Write-Host "[PASS] Remediation successful for all vulnerable adapters." -ForegroundColor Green
             }
         } else {
-            $remediate_status = "MANUAL"
-            Write-Host "[INFO] User declined automatic remediation. Providing manual instructions." -ForegroundColor Yellow
-            Write-Host "--------- 수동 조치 가이드 ---------" -ForegroundColor Cyan
-            Write-Host "$($check_content)"
-            Write-Host "---------------------------------"
+            $remediate_status = "PASS"
+            Write-Host "[INFO] No remediation required."
         }
-    } else {
-        $remediate_status = "PASS"
-        Write-Host "[INFO] No remediation required."
     }
 
     $discussion = @"
@@ -170,32 +211,6 @@ catch {
     }
 }
 finally {
-    # Restore original settings if they were changed
-    if ($choice -match '^[Yy]' -and $detect_status -eq 'FAIL') {
-        Write-Host ""
-        Write-Host "PHASE 4: RESTORING ORIGINAL SETTINGS" -ForegroundColor Magenta
-        Write-Host "------------------------------------"
-        
-        foreach ($adapter_to_restore in $vulnerable_adapters) {
-            $original_setting = $adapter_to_restore.NetbiosSetting
-            Write-Host "[ACTION] Restoring NetBIOS setting for '$($adapter_to_restore.Adapter)' to original value: $original_setting"
-            
-            if ($isLegacyPS) {
-                $adapter_instance = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$($adapter_to_restore.InterfaceIndex)"
-                $restore_result = $adapter_instance.SetTcpipNetbios($original_setting)
-            } else {
-                $adapter_instance = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$($adapter_to_restore.InterfaceIndex)"
-                $restore_result = $adapter_instance | Invoke-CimMethod -MethodName SetTcpipNetbios -Arguments @{TcpipNetbiosOptions = $original_setting}
-            }
-
-            if ($restore_result.ReturnValue -eq 0) {
-                Write-Host "[SUCCESS] Successfully restored setting for '$($adapter_to_restore.Adapter)'." -ForegroundColor Green
-            } else {
-                Write-Host "[ERROR] Failed to restore setting for '$($adapter_to_restore.Adapter)'." -ForegroundColor Red
-            }
-        }
-    }
-
     if ($result) {
         Write-Host "[INFO] Saving report to: $json_file"
         $result | ConvertTo-Json -Depth 5 | Set-Content -Path $json_file -Encoding UTF8

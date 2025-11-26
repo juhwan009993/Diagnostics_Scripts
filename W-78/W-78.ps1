@@ -1,6 +1,12 @@
+param(
+    [ValidateSet("Detect", "Remediate", "Restore")]
+    [string]$Action = "Detect"
+)
+
 $dir = $PSScriptRoot
 $log_dir = Join-Path $dir "KISA_LOG"
 $result_dir = Join-Path $dir "KISA_RESULT"
+$backup_file = Join-Path $dir "W-78.backup.json"
 New-Item -ItemType Directory -Force -Path $log_dir, $result_dir | Out-Null
 
 $log_file = Join-Path $log_dir "W-78.log"
@@ -10,10 +16,53 @@ $detect_status = "PASS"
 $remediate_status = "FAIL"
 $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ssK"
 
+function Get-SecureChannelPolicyStatus {
+    param($path, $policies)
+    Write-Host "[INFO] Querying registry for secure channel policies at: $path"
+    $status = @{}
+    foreach ($policy in $policies) {
+        $status[$policy] = (Get-ItemProperty -Path $path -Name $policy -ErrorAction SilentlyContinue).$policy
+    }
+    return $status
+}
+
+function Restore-FromBackup {
+    if (-not (Test-Path $backup_file)) {
+        throw "Backup file not found: $backup_file. Nothing to restore."
+    }
+    Write-Host "[INFO] Restoring settings from backup file: $backup_file" -ForegroundColor Cyan
+    $backup_data = Get-Content -Path $backup_file | ConvertFrom-Json
+    
+    foreach ($item in $backup_data) {
+        $policy_to_restore = $item.PSObject.Properties.Name
+        $original_value = $item.$policy_to_restore
+        
+        try {
+            if ($null -eq $original_value) {
+                Write-Host "[ACTION] Restoring policy '$policy_to_restore' by removing it (it did not exist originally)."
+                if (Get-ItemProperty -Path $reg_path -Name $policy_to_restore -ErrorAction SilentlyContinue) {
+                    Remove-ItemProperty -Path $reg_path -Name $policy_to_restore -Force -ErrorAction Stop
+                    Write-Host "[SUCCESS] Successfully removed policy '$policy_to_restore'." -ForegroundColor Green
+                } else {
+                    Write-Host "[INFO] Policy '$policy_to_restore' does not exist. No action needed." -ForegroundColor White
+                }
+            } else {
+                Write-Host "[ACTION] Restoring policy '$policy_to_restore' to original value: $original_value"
+                Set-ItemProperty -Path $reg_path -Name $policy_to_restore -Value $original_value -Type DWORD -Force -ErrorAction Stop
+                Write-Host "[SUCCESS] Successfully restored policy '$policy_to_restore'." -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "[ERROR] Failed to restore policy '$policy_to_restore'. Details: $_" -ForegroundColor Red
+        }
+    }
+    Remove-Item -Path $backup_file
+    Write-Host "[SUCCESS] Restoration complete. Backup file deleted." -ForegroundColor Green
+}
+
 try {
     Write-Host "[INFO] Starting script execution and logging to: $log_file"
     Start-Transcript -Path $log_file -Append
-    Write-Host "========= [W-78] Secure Channel Policy Security Assessment ==========" -ForegroundColor Cyan
+    Write-Host "========= [W-78] Secure Channel Policy Security Assessment (Action: $Action) ==========" -ForegroundColor Cyan
     Write-Host "[$ts]"
 
     # Administrator privilege check
@@ -28,14 +77,9 @@ try {
     $reg_path = "HKLM:\System\CurrentControlSet\Control\Lsa"
     $policy_names = @("RequireSignOrSeal", "SealSecureChannel", "SignSecureChannel")
 
-    function Get-SecureChannelPolicyStatus {
-        param($path, $policies)
-        Write-Host "[INFO] Querying registry for secure channel policies at: $path"
-        $status = @{}
-        foreach ($policy in $policies) {
-            $status[$policy] = (Get-ItemProperty -Path $path -Name $policy -ErrorAction SilentlyContinue).$policy
-        }
-        return $status
+    if ($Action -eq 'Restore') {
+        Restore-FromBackup
+        exit
     }
 
     Write-Host ""
@@ -56,14 +100,25 @@ try {
         Write-Host "[PASS] All secure channel policies are configured correctly." -ForegroundColor Green
     }
 
-    Write-Host ""
-    Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
-    Write-Host "--------------------"
     $final_status = $null
-    if ($detect_status -eq "FAIL") {
-        $choice = Read-Host "취약점이 발견되었습니다. 자동으로 조치하시겠습니까? (y/n)"
-        if ($choice -match '^[Yy]$') {
-            Write-Host "[INFO] User approved automatic remediation."
+    if ($Action -eq 'Remediate') {
+        Write-Host ""
+        Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
+        Write-Host "--------------------"
+        if ($detect_status -eq "FAIL") {
+            # Backup original settings for vulnerable policies
+            Write-Host "[INFO] Backing up original settings to $backup_file..."
+            $backup_data = $vulnerable_policies | ForEach-Object { 
+                $policyName = $_
+                $policyValue = $initial_status[$policyName]
+                [PSCustomObject]@{
+                    $policyName = $policyValue
+                }
+            }
+            $backup_data | ConvertTo-Json | Set-Content -Path $backup_file -Encoding UTF8
+            Write-Host "[SUCCESS] Backup complete." -ForegroundColor Green
+
+            # Apply remediation
             foreach ($policy in $vulnerable_policies) {
                 Write-Host "[ACTION] Setting policy '$policy' to 1 (Enabled)"
                 try {
@@ -86,15 +141,9 @@ try {
                 Write-Host "[PASS] Remediation successful for all vulnerable policies." -ForegroundColor Green
             }
         } else {
-            $remediate_status = "MANUAL"
-            Write-Host "[INFO] User declined automatic remediation. Providing manual instructions." -ForegroundColor Yellow
-            Write-Host "--------- 수동 조치 가이드 ---------" -ForegroundColor Cyan
-            Write-Host "$($check_content)"
-            Write-Host "---------------------------------"
+            $remediate_status = "PASS"
+            Write-Host "[INFO] No remediation required."
         }
-    } else {
-        $remediate_status = "PASS"
-        Write-Host "[INFO] No remediation required."
     }
 
     $discussion = @"
@@ -154,31 +203,6 @@ catch {
     }
 }
 finally {
-    # Restore original settings if they were changed
-    if ($choice -match '^[Yy]' -and $detect_status -eq 'FAIL') {
-        Write-Host ""
-        Write-Host "PHASE 4: RESTORING ORIGINAL SETTINGS" -ForegroundColor Magenta
-        Write-Host "------------------------------------"
-        
-        foreach ($policy_to_restore in $vulnerable_policies) {
-            $original_value = $initial_status[$policy_to_restore]
-            
-            try {
-                if ($null -eq $original_value) {
-                    Write-Host "[ACTION] Restoring policy '$policy_to_restore' by removing it (it did not exist originally)."
-                    Remove-ItemProperty -Path $reg_path -Name $policy_to_restore -Force -ErrorAction Stop
-                    Write-Host "[SUCCESS] Successfully removed policy '$policy_to_restore'." -ForegroundColor Green
-                } else {
-                    Write-Host "[ACTION] Restoring policy '$policy_to_restore' to original value: $original_value"
-                    Set-ItemProperty -Path $reg_path -Name $policy_to_restore -Value $original_value -Type DWORD -Force -ErrorAction Stop
-                    Write-Host "[SUCCESS] Successfully restored policy '$policy_to_restore'." -ForegroundColor Green
-                }
-            } catch {
-                Write-Host "[ERROR] Failed to restore policy '$policy_to_restore'. Details: $_" -ForegroundColor Red
-            }
-        }
-    }
-
     if ($result) {
         Write-Host "[INFO] Saving report to: $json_file"
         $result | ConvertTo-Json -Depth 5 | Set-Content -Path $json_file -Encoding UTF8

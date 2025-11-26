@@ -1,6 +1,13 @@
+param(
+    [ValidateSet("Detect", "Remediate", "Restore")]
+    [string]$Action = "Detect"
+)
+
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-$result_dir = "KISA_RESULT"
+$dir = $PSScriptRoot
+$result_dir = Join-Path $dir "KISA_RESULT"
+$backup_file = Join-Path $dir "W-63.backup.json"
 New-Item -ItemType Directory -Force -Path $result_dir | Out-Null
 
 $log_file = Join-Path $result_dir "W-63.log"
@@ -10,10 +17,42 @@ $detect_status = "PASS"
 $remediate_status = "FAIL"
 $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ssK"
 
+function Get-DnsZoneStatus {
+    Write-Host "[INFO] Querying for all primary DNS zones..."
+    Get-DnsServerPrimaryZone -ErrorAction Stop | ForEach-Object {
+        [PSCustomObject]@{
+            ZoneName      = $_.ZoneName
+            DynamicUpdate = $_.DynamicUpdate.ToString()
+            IsVulnerable  = $_.DynamicUpdate -ne "None"
+        }
+    }
+}
+
+function Restore-FromBackup {
+    if (-not (Test-Path $backup_file)) {
+        throw "Backup file not found: $backup_file. Nothing to restore."
+    }
+    Write-Host "[INFO] Restoring settings from backup file: $backup_file" -ForegroundColor Cyan
+    $zones_to_restore = Get-Content -Path $backup_file | ConvertFrom-Json
+    
+    foreach ($zone_to_restore in $zones_to_restore) {
+        $original_setting = $zone_to_restore.DynamicUpdate
+        Write-Host "[ACTION] Restoring dynamic update setting for zone '$($zone_to_restore.ZoneName)' to original value: $original_setting"
+        try {
+            Set-DnsServerPrimaryZone -Name $zone_to_restore.ZoneName -DynamicUpdate $original_setting -ErrorAction Stop
+            Write-Host "[SUCCESS] Successfully restored setting for zone '$($zone_to_restore.ZoneName)'." -ForegroundColor Green
+        } catch {
+            Write-Host "[ERROR] Failed to restore setting for zone '$($zone_to_restore.ZoneName)'. Details: $_" -ForegroundColor Red
+        }
+    }
+    Remove-Item -Path $backup_file
+    Write-Host "[SUCCESS] Restoration complete. Backup file deleted." -ForegroundColor Green
+}
+
 try {
     Write-Host "[INFO] Starting script execution and logging to: $log_file"
     Start-Transcript -Path $log_file -Append
-    Write-Host "========= [W-63] DNS Dynamic Update Security Assessment ==========" -ForegroundColor Cyan
+    Write-Host "========= [W-63] DNS Dynamic Update Security Assessment (Action: $Action) ==========" -ForegroundColor Cyan
     Write-Host "[$ts]"
 
     # Administrator privilege check
@@ -24,6 +63,12 @@ try {
         throw "This script must be run with Administrator privileges."
     }
     Write-Host "[SUCCESS] Administrator privileges confirmed." -ForegroundColor Green
+
+    if ($Action -eq 'Restore') {
+        Import-Module DnsServer -ErrorAction Stop
+        Restore-FromBackup
+        exit
+    }
 
     Write-Host ""
     Write-Host "PHASE 1: VULNERABILITY DETECTION" -ForegroundColor Magenta
@@ -54,17 +99,6 @@ try {
             try {
                 Import-Module DnsServer -ErrorAction Stop
 
-                function Get-DnsZoneStatus {
-                    Write-Host "[INFO] Querying for all primary DNS zones..."
-                    Get-DnsServerPrimaryZone -ErrorAction Stop | ForEach-Object {
-                        [PSCustomObject]@{
-                            ZoneName      = $_.ZoneName
-                            DynamicUpdate = $_.DynamicUpdate.ToString()
-                            IsVulnerable  = $_.DynamicUpdate -ne "None"
-                        }
-                    }
-                }
-
                 $initial_status = Get-DnsZoneStatus
                 $vulnerable_zones = $initial_status | Where-Object { $_.IsVulnerable }
 
@@ -89,14 +123,18 @@ try {
         }
     }
 
-    Write-Host ""
-    Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
-    Write-Host "--------------------"
     $final_status = $null
-    if ($detect_status -eq "FAIL") {
-        $choice = Read-Host "취약점이 발견되었습니다. 자동으로 조치하시겠습니까? (y/n)"
-        if ($choice -match '^[Yy]$') {
-            Write-Host "[INFO] User approved automatic remediation."
+    if ($Action -eq 'Remediate') {
+        Write-Host ""
+        Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
+        Write-Host "--------------------"
+        if ($detect_status -eq "FAIL") {
+            # Backup original settings
+            Write-Host "[INFO] Backing up original settings for vulnerable zones to $backup_file..."
+            $vulnerable_zones | ConvertTo-Json | Set-Content -Path $backup_file -Encoding UTF8
+            Write-Host "[SUCCESS] Backup complete." -ForegroundColor Green
+
+            # Apply remediation
             foreach ($zone in $vulnerable_zones) {
                 Write-Host "[ACTION] Disabling dynamic updates for zone: $($zone.ZoneName)"
                 try {
@@ -107,6 +145,7 @@ try {
                 }
             }
 
+            # Verification
             Write-Host "[INFO] Verifying remediation..."
             $final_status = Get-DnsZoneStatus
             if ($null -eq $final_status) { throw "Could not re-check DNS zones after remediation." }
@@ -118,18 +157,12 @@ try {
                 $remediate_status = "PASS"
                 Write-Host "[PASS] Remediation successful for all vulnerable zones." -ForegroundColor Green
             }
-        } else {
-            $remediate_status = "MANUAL"
-            Write-Host "[INFO] User declined automatic remediation. Providing manual instructions." -ForegroundColor Yellow
-            $manual_guide = "In DNS Manager (dnsmgmt.msc), right-click each vulnerable zone, go to Properties, and on the General tab, set 'Dynamic updates' to 'None'."
-            Write-Host "--------- 수동 조치 가이드 ---------" -ForegroundColor Cyan
-            Write-Host $manual_guide
-            Write-Host "---------------------------------"
+        } elseif ($detect_status -match "PASS|MANUAL_CHECK_NEEDED") {
+            $remediate_status = "PASS"
+            Write-Host "[INFO] No remediation required."
         }
-    } elseif ($detect_status -match "PASS|MANUAL_CHECK_NEEDED") {
-        $remediate_status = "PASS"
-        Write-Host "[INFO] No remediation required."
     }
+
 
     if (!$discussion) {
         $discussion = @'
@@ -184,23 +217,6 @@ catch {
     }
 }
 finally {
-    if ($choice -match '^[Yy]' -and $detect_status -eq 'FAIL') {
-        Write-Host ""
-        Write-Host "PHASE 4: RESTORING ORIGINAL SETTINGS" -ForegroundColor Magenta
-        Write-Host "------------------------------------"
-        
-        foreach ($zone_to_restore in $vulnerable_zones) {
-            $original_setting = $zone_to_restore.DynamicUpdate
-            Write-Host "[ACTION] Restoring dynamic update setting for zone '$($zone_to_restore.ZoneName)' to original value: $original_setting"
-            try {
-                Set-DnsServerPrimaryZone -Name $zone_to_restore.ZoneName -DynamicUpdate $original_setting -ErrorAction Stop
-                Write-Host "[SUCCESS] Successfully restored setting for zone '$($zone_to_restore.ZoneName)'." -ForegroundColor Green
-            } catch {
-                Write-Host "[ERROR] Failed to restore setting for zone '$($zone_to_restore.ZoneName)'. Details: $_" -ForegroundColor Red
-            }
-        }
-    }
-
     if ($result) {
         Write-Host "[INFO] Saving report to: $json_file"
         $result | ConvertTo-Json -Depth 5 | Set-Content -Path $json_file -Encoding UTF8
