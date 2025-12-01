@@ -1,6 +1,0 @@
-﻿{
-    "date":  "2025-12-01 13:12:13+09:00",
-    "check_target":  "W-24: NetBIOS binding service running check",
-    "status":  "ERROR",
-    "discussion":  "Backup file not found: C:\\Users\\Administrator\\Desktop\\w\\W-24.backup.json. Nothing to restore."
-}

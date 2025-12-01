@@ -1,6 +1,0 @@
-﻿{
-    "date":  "2025-12-01 13:17:38+09:00",
-    "check_target":  "W-63: DNS Dynamic Updates Enabled",
-    "status":  "ERROR",
-    "discussion":  "The specified module \u0027DnsServer\u0027 was not loaded because no valid module file was found in any module directory."
-}
