@@ -115,8 +115,8 @@ try {
     $vulnerable_policies = $policy_names | Where-Object { $initial_status[$_] -ne 1 }
 
     if ($vulnerable_policies) {
-        $detect_status = "Vulnerable"
-        Write-Host "[Vulnerable] Vulnerable secure channel policies found:" -ForegroundColor Yellow
+        $detect_status = "FAIL"
+        Write-Host "[FAIL] Vulnerable secure channel policies found:" -ForegroundColor Yellow
         # Output vulnerable policies and their current values.
         $vulnerable_policies | ForEach-Object { 
             $current_val = if ($null -eq $initial_status[$_]) { "Not Found" } else { $initial_status[$_] }
@@ -133,7 +133,7 @@ try {
         Write-Host ""
         Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
         Write-Host "--------------------"
-        if ($detect_status -eq "Vulnerable") { # 취약한 경우에만 조치를 진행합니다.
+        if ($detect_status -eq "FAIL") { # Proceed with remediation only if vulnerable.
             # Back up original settings.
             Write-Host "[INFO] Backing up original settings to $backup_file..."
             $backup_data = $vulnerable_policies | ForEach-Object { 
@@ -165,8 +165,8 @@ try {
                 $remediate_status = "FAIL" # Remediation failed.
                 Write-Host "[FAIL] Remediation failed for one or more policies." -ForegroundColor Red
             } else {
-                $remediate_status = "SUCCESS" # 조치 성공.
-                Write-Host "[SUCCESS] Remediation successful for all vulnerable policies." -ForegroundColor Green
+                $remediate_status = "PASS" # Remediation successful.
+                Write-Host "[PASS] Remediation successful for all vulnerable policies." -ForegroundColor Green
             }
         } else {
             $remediate_status = "PASS" # No remediation required.

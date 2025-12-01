@@ -24,19 +24,43 @@ NetBIOS over TCP/IP는 레거시 응용프로그램과의 호환성을 위해 �
 
 ## 3. 사용법
 
-### 3.1. 취약점 점검 및 자동 조치
+### 3.1. 취약점 점검 및 자동 조치 (기본)
+
+`W-24.ps1` 스크립트는 `-Action` 매개변수를 통해 세 가지 모드로 실행될 수 있습니다: `Detect`, `Remediate`, `Restore`. 기본값은 `Detect`입니다.
 
 1.  PowerShell을 **관리자 권한**으로 실행합니다.
 2.  스크립트가 있는 디렉터리로 이동합니다.
     ```powershell
     cd W-24
     ```
-3.  메인 스크립트를 실행합니다.
-    ```powershell
-    .\W-24.ps1
-    ```
-4.  스크립트가 취약점을 발견하면 자동으로 조치할지 묻습니다. `y`를 입력하면 모든 취약한 어댑터의 NetBIOS 설정이 '사용 안 함'으로 변경됩니다.
-5.  모든 실행 과정은 `KISA_LOG/W-24.log`에 기록되며, 최종 결과는 `KISA_RESULT/W-24.json` 파일에 저장됩니다.
+
+3.  **점검 모드 (Detect - 기본값)**
+    *   시스템의 NetBIOS over TCP/IP 설정 취약점만을 점검합니다.
+    *   조치는 수행하지 않습니다.
+    *   실행 명령:
+        ```powershell
+        .\W-24.ps1 -Action Detect
+        # 또는 매개변수 없이 실행 (기본 동작)
+        .\W-24.ps1
+        ```
+
+4.  **조치 모드 (Remediate)**
+    *   취약점을 점검하고, 발견된 취약점에 대해 NetBIOS over TCP/IP를 자동으로 비활성화하는 조치를 수행합니다.
+    *   조치 전에 현재 설정을 `W-24.backup.json` 파일로 백업합니다.
+    *   실행 명령:
+        ```powershell
+        .\W-24.ps1 -Action Remediate
+        ```
+
+5.  **복원 모드 (Restore)**
+    *   이전에 `Remediate` 모드에서 백업된 `W-24.backup.json` 파일을 사용하여 NetBIOS over TCP/IP 설정을 원래 상태로 복원합니다.
+    *   백업 파일이 없으면 복원이 불가능합니다.
+    *   실행 명령:
+        ```powershell
+        .\W-24.ps1 -Action Restore
+        ```
+
+6.  모든 실행 과정은 `KISA_RESULT/W-24.log`에 기록되며, 최종 결과는 `KISA_RESULT/W-24.json` 파일에 저장됩니다.
 
 ### 3.2. 취약점 상태 재현 (테스트용)
 

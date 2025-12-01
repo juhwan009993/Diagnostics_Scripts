@@ -208,7 +208,7 @@ try {
         Write-Host ""
         Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
         Write-Host "--------------------"
-        if ($detect_status -eq "Vulnerable") { # 취약한 경우에만 조치를 진행합니다.
+        if ($detect_status -eq "FAIL") {
             # Back up original settings.
             Write-Host "[INFO] Backing up original settings for vulnerable zones to $backup_file..."
             $vulnerable_zones | ConvertTo-Json | Set-Content -Path $backup_file -Encoding UTF8

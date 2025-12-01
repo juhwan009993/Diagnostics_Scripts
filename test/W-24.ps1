@@ -179,8 +179,8 @@ try {
                 $remediate_status = "FAIL" # 조치 실패
                 Write-Host "[FAIL] Remediation failed for one or more adapters." -ForegroundColor Red
             } else {
-                $remediate_status = "SUCCESS" # 조치 성공
-                Write-Host "[SUCCESS] Remediation successful for all vulnerable adapters." -ForegroundColor Green
+                $remediate_status = "PASS" # 조치 성공
+                Write-Host "[PASS] Remediation successful for all vulnerable adapters." -ForegroundColor Green
             }
         } else {
             $remediate_status = "PASS" # 조치할 취약점 없음
