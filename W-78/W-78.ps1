@@ -1,4 +1,4 @@
-# 스크립트 매개변수 정의
+﻿# 스크립트 매개변수 정의
 # -a: 스크립트의 실행 모드를 지정합니다 (Detect, Remediate, Restore). 기본값은 Detect입니다.
 param(
     [ValidateSet("Detect", "Remediate", "Restore")]
@@ -9,10 +9,10 @@ param(
 $dir = $PSScriptRoot
 $result_dir = Join-Path $dir "KISA_RESULT"
 $backup_file = Join-Path $dir "W-78.backup.json"
-# 결과 디렉터리가 없으면 생성합니다.
+# 결과 디렉터리가 없으면 생성.
 New-Item -ItemType Directory -Force -Path $result_dir | Out-Null
 
-# 로그 및 JSON 결과 파일 경로를 설정합니다.
+# 로그 및 JSON 결과 파일 경로를 설정.
 $log_file = Join-Path $result_dir "W-78.log"
 $json_file = Join-Path $result_dir "W-78.json"
 
@@ -23,13 +23,13 @@ $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ssK" # 현재 타임스탬프
 
 # --- 함수 정의 ---
 
-# 함수: 레지스트리에서 보안 채널 관련 정책들의 현재 값을 가져옵니다.
+# 함수: 레지스트리에서 보안 채널 관련 정책들의 현재 값을 가져옴.
 function Get-SecureChannelPolicyStatus {
     param($path, $policies)
     Write-Host "[INFO] Querying registry for secure channel policies at: $path"
     $status = @{}
     foreach ($policy in $policies) {
-        # Get-ItemProperty를 사용하여 각 정책 값을 조회하고 상태 해시테이블에 저장합니다.
+        # Get-ItemProperty를 사용하여 각 정책 값을 조회하고 상태 해시테이블에 저장.
         $value = (Get-ItemProperty -Path $path -Name $policy -ErrorAction SilentlyContinue).$policy
         Write-Host "[DEBUG] Policy: '$policy', Value read from registry: '$value'"
         $status[$policy] = $value
@@ -37,7 +37,7 @@ function Get-SecureChannelPolicyStatus {
     return $status
 }
 
-# 함수: 백업 파일로부터 보안 채널 정책 설정을 복원합니다.
+# 함수: 백업 파일로부터 보안 채널 정책 설정을 복원.
 function Restore-FromBackup {
     if (-not (Test-Path $backup_file)) {
         Write-Host "[INFO] Backup file not found: $backup_file. Nothing to restore." -ForegroundColor Cyan
@@ -46,13 +46,13 @@ function Restore-FromBackup {
     Write-Host "[INFO] Restoring settings from backup file: $backup_file" -ForegroundColor Cyan
     $backup_data = Get-Content -Path $backup_file | ConvertFrom-Json
     
-    # 백업된 각 정책에 대한 설정을 복원합니다.
+    # 백업된 각 정책에 대한 설정을 복원.
     foreach ($item in $backup_data) {
         $policy_to_restore = $item.PSObject.Properties.Name
         $original_value = $item.$policy_to_restore
         
         try {
-            # 원래 값이 null이면 레지스트리 값을 제거합니다 (원래 존재하지 않았으므로).
+            # 원래 값이 null이면 레지스트리 값을 제거 (원래 존재하지 않았으므로).
             if ($null -eq $original_value) {
                 Write-Host "[ACTION] Restoring policy '$policy_to_restore' by removing it (it did not exist originally)."
                 if (Get-ItemProperty -Path $reg_path -Name $policy_to_restore -ErrorAction SilentlyContinue) {
@@ -62,7 +62,7 @@ function Restore-FromBackup {
                     Write-Host "[INFO] Policy '$policy_to_restore' does not exist. No action needed." -ForegroundColor White
                 }
             } else {
-                # 원래 값이 있었다면, 레지스트리를 해당 값으로 설정합니다.
+                # 원래 값이 있었다면, 레지스트리를 해당 값으로 설정.
                 Write-Host "[ACTION] Restoring policy '$policy_to_restore' to original value: $original_value"
                 Set-ItemProperty -Path $reg_path -Name $policy_to_restore -Value $original_value -Type DWORD -Force -ErrorAction Stop
                 Write-Host "[SUCCESS] Successfully restored policy '$policy_to_restore'." -ForegroundColor Green
@@ -71,7 +71,7 @@ function Restore-FromBackup {
             Write-Host "[ERROR] Failed to restore policy '$policy_to_restore'. Details: $_" -ForegroundColor Red
         }
     }
-    # 복원 성공 후 백업 파일을 삭제합니다.
+    # 복원 성공 후 백업 파일을 삭제.
     Remove-Item -Path $backup_file
     Write-Host "[SUCCESS] Restoration complete. Backup file deleted." -ForegroundColor Green
 }
@@ -107,15 +107,15 @@ try {
     Write-Host ""
     Write-Host "PHASE 1: VULNERABILITY DETECTION" -ForegroundColor Magenta
     Write-Host "---------------------------------"
-    # 레지스트리에서 현재 보안 채널 정책 값을 가져옵니다.
+    # 레지스트리에서 현재 보안 채널 정책 값을 가져옴.
     $initial_status = Get-SecureChannelPolicyStatus -path $reg_path -policies $policy_names
-    # 값이 1이 아닌 (취약한) 정책들을 필터링합니다.
+    # 값이 1이 아닌 (취약한) 정책들을 필터링.
     $vulnerable_policies = $policy_names | Where-Object { $initial_status[$_] -ne 1 }
 
     if ($vulnerable_policies) {
         $detect_status = "Vulnerable"
         Write-Host "[Vulnerable] Vulnerable secure channel policies found:" -ForegroundColor Yellow
-        # 취약한 정책과 현재 값을 출력합니다.
+        # 취약한 정책과 현재 값을 출력.
         $vulnerable_policies | ForEach-Object { 
             $current_val = if ($null -eq $initial_status[$_]) { "Not Found" } else { $initial_status[$_] }
             Write-Host " - $_ is set to '$($current_val)' (Should be 1)" -ForegroundColor Yellow
@@ -131,7 +131,7 @@ try {
         Write-Host ""
         Write-Host "PHASE 2: REMEDIATION" -ForegroundColor Magenta
         Write-Host "--------------------"
-        if ($detect_status -eq "Vulnerable") { # 취약한 경우에만 조치를 진행합니다.
+        if ($detect_status -eq "Vulnerable") { # 취약한 경우에만 조치를 진행.
             # 원래 설정 백업.
             Write-Host "[INFO] Backing up original settings to $backup_file..."
             $backup_data = $vulnerable_policies | ForEach-Object { 
@@ -203,7 +203,7 @@ Check the following registry values under HKLM:\System\CurrentControlSet\Control
             port         = "53"
             service      = "NetLogon"
             protocol     = "RPC"
-            threat       = @("Man-in-the-Middle (MitM) Attack", "Session Hijacking", "Replay Attack")
+            threat       = @("Man-in-the-Middle (MTIM) Attack", "Session Hijacking", "Replay Attack")
             TTP          = @("T1071", "T1557")
             file_checked = "Registry: HKLM\System\CurrentControlSet\Control\Lsa"
         }
